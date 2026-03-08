@@ -1,6 +1,6 @@
-//============================================================================
-// Include these libraries
-//============================================================================
+    //============================================================================
+    // Include these libraries
+    //============================================================================
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,18 +12,19 @@
 #include "http.h"
 
 
-//============================================================================
-// Constants
-//============================================================================
-
-// :( no constants yet
+    //============================================================================
+    // Constants
+    //============================================================================
 
 
 
+    // declare helper function for start_server
+    int read_http_request(int client_socket, char *buffer, int buffer_size);
 
-//============================================================================
-// Start Server function
-//============================================================================
+
+    //============================================================================
+    // Start Server function
+    //============================================================================
 
 void start_server(int port) {
 
@@ -52,6 +53,7 @@ void start_server(int port) {
 
     int opt = 1;
     setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
 
 
     //============================================================================
@@ -114,22 +116,23 @@ void start_server(int port) {
 
 
 
-        // read the request 
-        char buffer[2048];
-
+        // read the full HTTP request
+        char buffer[8192];
         // int recv(int sockfd, void *buf, int len, int flags);
-        int bytes = recv(client_socket, buffer, sizeof(buffer)-1, 0);
-        if(bytes < 0){
-            perror("recv failed");
+        int bytes = read_http_request(client_socket, buffer, sizeof(buffer));
+
+        if (bytes <= 0) {
+            perror("read_http_request failed");
             close(client_socket);
             continue;
         }
-        buffer[bytes] = '\0';
+
         printf("Request:\n%s\n", buffer);
 
 
-        // parse GET path
-        char method[8];
+
+        // parse GET/POST/PUT/DELETE path
+        char method[16];
         char path[256];
         sscanf(buffer, "%s %s", method, path);
         printf("Method: %s\n", method);
@@ -137,15 +140,29 @@ void start_server(int port) {
 
         // map the url to the file
         char file_path[512];
-        
         if (strcmp(path, "/") == 0) {
             strcpy(file_path, "www/index.html");
         } 
         else {
             snprintf(file_path, sizeof(file_path), "www%s", path);
         }
-        // send response
-        send_html(client_socket, file_path);
+
+        // check method type here
+        if (strcmp(method, "GET") == 0) {
+            send_html(client_socket, file_path);
+        }
+        else if (strcmp(method, "POST") == 0) {
+            handle_post(client_socket, buffer);
+        }
+        else if (strcmp(method, "PUT") == 0) {
+            handle_put(client_socket, file_path, buffer);
+        }
+        else if (strcmp(method, "DELETE") == 0) {
+            handle_delete(client_socket, file_path);
+        }
+        else {
+            send_405(client_socket);
+        }
 
         //---------------------------  close & print
         close(client_socket);
@@ -154,3 +171,58 @@ void start_server(int port) {
 
 }
 
+
+
+
+
+
+//============================================================================
+// Recv helper function
+//============================================================================
+
+    // tcp is a continous stream of bytes, may not just be 
+    int read_http_request(int client_socket, char *buffer, int buffer_size) {
+        int total = 0;
+
+        while (1) {
+            int bytes = recv(client_socket, buffer + total, buffer_size - total, 0);
+            if (bytes <= 0) {
+                return -1;
+            }
+
+            total += bytes;
+            buffer[total] = '\0';
+
+            // check if we reached end of headers
+            char *header_end = strstr(buffer, "\r\n\r\n");
+            if (header_end) {
+
+                // check for Content-Length
+                char *cl = strstr(buffer, "Content-Length:");
+                int content_length = 0;
+
+                if (cl) {
+                    sscanf(cl, "Content-Length: %d", &content_length);
+                }
+
+                char *body = header_end + 4;
+                int body_received = total - (body - buffer);
+
+                // keep reading until full body received
+                while (body_received < content_length) {
+                    bytes = recv(client_socket, buffer + total, buffer_size - total, 0);
+                    if (bytes <= 0) {
+                        return -1;
+                    }
+
+                    total += bytes;
+                    body_received += bytes;
+                    buffer[total] = '\0';
+                }
+
+                break;
+            }
+        }
+
+        return total;
+    }

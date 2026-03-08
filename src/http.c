@@ -25,16 +25,16 @@
     // flags - just set flags to 0 :)
 
     void send_html(int client_socket, const char *path) {
-   FILE *file = fopen(path, "r");
+    FILE *file = fopen(path, "r");
 
-   // give a 404 error if the file cannot be opened
+    // give a 404 error if the file cannot be opened
     if (!file) {
         char *response =
             "HTTP/1.1 404 Not Found\r\n"
             "Content-Type: text/plain\r\n"
             "\r\n"
             "404 Not Found";
-
+        // ssize_t send(int sockfd, const void *buf, size_t len, int flags);
         send(client_socket, response, strlen(response), 0);
         return;
     }
@@ -61,4 +61,94 @@
     // Implementation of post request
     //============================================================================
     
+
+    void handle_post(int client_socket, char *request){
+        char *body = strstr(request, "\r\n\r\n");
+
+        if (body != NULL) {
+            body += 4;
+            printf("POST data: %s\n", body);
+        }
+
+        char *response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n\r\n"
+            "POST received";
+
+        send(client_socket, response, strlen(response), 0);
+}
+
+
+
+
+
+    //============================================================================
+    // Implementation of put request
+    //============================================================================
+    void handle_put(int client_socket, const char *path, char *request){
+        char *body = strstr(request, "\r\n\r\n");
+
+        if (body == NULL) {
+            send_405(client_socket);
+            return;
+        }
+
+        body += 4;
+
+        FILE *file = fopen(path, "w");
+
+        if (!file) {
+            send_405(client_socket);
+            return;
+        }
+
+        fprintf(file, "%s", body);
+        fclose(file);
+
+        char *response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n\r\n"
+            "File written\n";
+
+        send(client_socket, response, strlen(response), 0);
+}
+
+    //============================================================================
+    // Implementation of delete request
+    //============================================================================
+    void handle_delete(int client_socket, const char *path){
+        // remove same as rm filename
+        if (remove(path) == 0) {
+
+            char *response =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n\r\n"
+                "File deleted\n";
+
+            send(client_socket, response, strlen(response), 0);
+
+        } 
+        else{
+            char *response =
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Type: text/plain\r\n\r\n"
+                "File not found\n";
+
+            send(client_socket, response, strlen(response), 0);
+        }
+}
+
+    //============================================================================
+    // Implementation of 405 error
+    //============================================================================
+    void send_405(int client_socket){
+        char *response =
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Content-Type: text/plain\r\n\r\n"
+            "Method Not Allowed";
+
+        send(client_socket, response, strlen(response), 0);
+    }
+
+
     

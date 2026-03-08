@@ -1,33 +1,32 @@
-Data Flow in program
+Build and Run the Server
 
-browser request
-      ↓
-server.c (accept connection)
-      ↓
-http.c (parse request)
-      ↓
-cache.c (check cache)
-      ↓
-filesystem (if cache miss)
-      ↓
-build response
-      ↓
-send response
-
-
-to run----
-
-compile server
+1. Compile the server
 gcc -Wall -Wextra -Iinclude src/*.c -o server
 
-run server
+2. Start the server
 ./server 8080
 
-test server
+3. Tests -----------------------------------------------------
+1. Test GET requests (browser)
 http://localhost:8080/
-or 
+or
 http://localhost:8080/hello.txt
 
-better
+-----------------------------------------------------
+2. Test GET requests (curl)
 curl http://localhost:8080/
+or verbose mode
 curl -v http://localhost:8080/
+
+-----------------------------------------------------
+3. Test POST
+curl -X POST http://localhost:8080/test -d "hello=world"
+
+-----------------------------------------------------
+4. Test PUT
+curl -X PUT http://localhost:8080/newfile.txt -d "Hello from PUT"
+
+5. Test DELETE
+curl -X DELETE http://localhost:8080/newfile.txt
+
+
