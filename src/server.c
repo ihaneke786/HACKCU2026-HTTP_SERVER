@@ -19,7 +19,7 @@
 
 
     // declare helper function for start_server
-    int read_http_request(int client_socket, char *buffer, int buffer_size);
+int read_http_request(int client_socket, char *buffer, int buffer_size);
 
 
     //============================================================================
@@ -138,6 +138,14 @@ void start_server(int port) {
         printf("Method: %s\n", method);
         printf("Path: %s\n", path);
 
+        // Prevent directory traversal attacks
+        if (strstr(path, "..") != NULL) {
+            send_403(client_socket);
+            close(client_socket);
+                continue;
+}
+
+
         // map the url to the file
         char file_path[512];
         if (strcmp(path, "/") == 0) {
@@ -149,7 +157,7 @@ void start_server(int port) {
 
         // check method type here
         if (strcmp(method, "GET") == 0) {
-            send_html(client_socket, file_path);
+            send_file(client_socket, file_path);
         }
         else if (strcmp(method, "POST") == 0) {
             handle_post(client_socket, buffer);

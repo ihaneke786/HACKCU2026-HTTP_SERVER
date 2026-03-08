@@ -15,8 +15,30 @@
     //============================================================================
 
     #define BUFFER_SIZE 2048
+
+
+//============================================================================
+// Determine content type
+//============================================================================
+// almost forgot to add more than txt and html file options
+const char *get_content_type(const char *path) {
+
+    const char *ext = strrchr(path, '.');
+    if (!ext) return "application/octet-stream";
+    if (strcmp(ext, ".html") == 0) return "text/html";
+    if (strcmp(ext, ".txt") == 0) return "text/plain";
+    if (strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0) return "image/jpeg";
+    if (strcmp(ext, ".png") == 0) return "image/png";
+    if (strcmp(ext, ".gif") == 0) return "image/gif";
+    if (strcmp(ext, ".css") == 0) return "text/css";
+    if (strcmp(ext, ".js") == 0) return "application/javascript";
+
+    return "application/octet-stream";
+}
+
+
     //============================================================================
-    // Send HTTP response to client
+    // Send File to client (binary safe)
     //============================================================================
 
     // int send(int sockfd, const void *msg, int len, int flags);
@@ -24,36 +46,47 @@
     // msg - ptr to data you want to send
     // flags - just set flags to 0 :)
 
-    void send_html(int client_socket, const char *path) {
-    FILE *file = fopen(path, "r");
+    void send_file(int client_socket, const char *path) {
 
-    // give a 404 error if the file cannot be opened
-    if (!file) {
-        char *response =
-            "HTTP/1.1 404 Not Found\r\n"
-            "Content-Type: text/plain\r\n"
-            "\r\n"
-            "404 Not Found";
-        // ssize_t send(int sockfd, const void *buf, size_t len, int flags);
-        send(client_socket, response, strlen(response), 0);
-        return;
-    }
+        FILE *file = fopen(path, "rb");
 
-    char buffer[BUFFER_SIZE];
-    size_t bytes_read;
-    
-    // Send HTTP headers
-    char *headers =
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html\r\n\r\n";
+        if (!file) {
+            char *response =
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 13\r\n"
+                "\r\n"
+                "404 Not Found";
 
-    send(client_socket, headers, strlen(headers), 0);
+            send(client_socket, response, strlen(response), 0);
+            return;
+        }
 
-    // Send HTML content
-    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-        send(client_socket, buffer, bytes_read, 0);
-    }
-    fclose(file);
+        const char *content_type = get_content_type(path);
+
+        fseek(file, 0, SEEK_END);
+        long file_size = ftell(file);
+        rewind(file);
+
+        char headers[256];
+
+        snprintf(headers, sizeof(headers),
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %ld\r\n"
+            "\r\n",
+            content_type, file_size);
+
+        send(client_socket, headers, strlen(headers), 0);
+
+        char buffer[BUFFER_SIZE];
+        size_t bytes_read;
+
+        while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+            send(client_socket, buffer, bytes_read, 0);
+        }
+
+        fclose(file);
 }
 
 
@@ -83,26 +116,37 @@
 
 
     //============================================================================
-    // Implementation of put request
+    // Implementation of put request (now binary safe)
     //============================================================================
-    void handle_put(int client_socket, const char *path, char *request){
-        char *body = strstr(request, "\r\n\r\n");
+    void handle_put(int client_socket, const char *path, char *request) {
 
-        if (body == NULL) {
+        char *header_end = strstr(request, "\r\n\r\n");
+
+        if (!header_end) {
             send_405(client_socket);
             return;
         }
 
-        body += 4;
+        char *cl = strstr(request, "Content-Length:");
 
-        FILE *file = fopen(path, "w");
+        int content_length = 0;
+
+        if (cl) {
+            sscanf(cl, "Content-Length: %d", &content_length);
+        } else {
+            send_405(client_socket);
+            return;
+        }
+
+        char *body = header_end + 4;
+        FILE *file = fopen(path, "wb");
 
         if (!file) {
             send_405(client_socket);
             return;
         }
 
-        fprintf(file, "%s", body);
+        fwrite(body, 1, content_length, file);
         fclose(file);
 
         char *response =
@@ -111,7 +155,7 @@
             "File written\n";
 
         send(client_socket, response, strlen(response), 0);
-}
+    }
 
     //============================================================================
     // Implementation of delete request
@@ -126,8 +170,8 @@
                 "File deleted\n";
 
             send(client_socket, response, strlen(response), 0);
-
         } 
+
         else{
             char *response =
                 "HTTP/1.1 404 Not Found\r\n"
@@ -151,4 +195,17 @@
     }
 
 
-    
+    //============================================================================
+    // Implementation of 403 error
+    //============================================================================
+    void send_403(int client_socket) {
+
+        char *response =
+            "HTTP/1.1 403 Forbidden\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 13\r\n"
+            "\r\n"
+            "403 Forbidden";
+
+        send(client_socket, response, strlen(response), 0);
+    }
