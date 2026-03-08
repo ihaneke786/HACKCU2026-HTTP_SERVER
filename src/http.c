@@ -40,51 +40,72 @@ const char *get_content_type(const char *path) {
 
 
 //============================================================================
-// Send File to client (binary safe)
+// Send helper (handles partial TCP sends)
 //============================================================================
 
-void send_file(int client_socket, const char *path) {
+void send_all(int socket,const void *buf,size_t len)
+{
+    size_t total = 0;
 
-    FILE *file = fopen(path, "rb");
+    while (total < len)
+    {
+        ssize_t sent = send(socket,
+                            (char*)buf + total,
+                            len - total,
+                            0);
 
-    if (!file) {
+        if (sent <= 0)
+            return;
 
+        total += sent;
+    }
+}
+
+
+//============================================================================
+// Send file (binary safe)
+//============================================================================
+
+void send_file(int client_socket,const char *path)
+{
+    FILE *file = fopen(path,"rb");
+
+    if (!file){
         char *response =
-            "HTTP/1.1 404 Not Found\r\n"
-            "Content-Type: text/plain\r\n"
-            "Content-Length: 13\r\n"
-            "\r\n"
-            "404 Not Found";
+        "HTTP/1.1 404 Not Found\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 13\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+        "404 Not Found";
 
-        send(client_socket, response, strlen(response), 0);
+        send_all(client_socket,response,strlen(response));
         return;
     }
 
-    const char *content_type = get_content_type(path);
+    const char *type = get_content_type(path);
 
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
+    fseek(file,0,SEEK_END);
+    long size = ftell(file);
     rewind(file);
 
     char headers[256];
 
-    snprintf(headers, sizeof(headers),
+    snprintf(headers,sizeof(headers),
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %ld\r\n"
+        "Connection: keep-alive\r\n"
         "\r\n",
-        content_type, file_size);
+        type,size);
 
-    send(client_socket, headers, strlen(headers), 0);
+    send_all(client_socket,headers,strlen(headers));
 
     char buffer[BUFFER_SIZE];
-    size_t bytes_read;
+    size_t bytes;
 
-    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-        size_t sent = 0;
-            while (sent < bytes_read)
-                sent += send(client_socket, buffer + sent, bytes_read - sent, 0);
-    }
+    while ((bytes = fread(buffer,1,BUFFER_SIZE,file)) > 0)
+        send_all(client_socket,buffer,bytes);
 
     fclose(file);
 }
@@ -92,24 +113,28 @@ void send_file(int client_socket, const char *path) {
 
 
 //============================================================================
-// Implementation of POST request
+// POST
 //============================================================================
 
-void handle_post(int client_socket, char *request) {
+void handle_post(int client_socket,char *request)
+{
+    char *body = strstr(request,"\r\n\r\n");
 
-    char *body = strstr(request, "\r\n\r\n");
-
-    if (body != NULL) {
+    if (body)
+    {
         body += 4;
-        printf("POST data: %s\n", body);
+        printf("POST data: %s\n",body);
     }
 
     char *response =
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain\r\n\r\n"
-        "POST received";
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 13\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "POST received";
 
-    send(client_socket, response, strlen(response), 0);
+    send_all(client_socket,response,strlen(response));
 }
 
 
@@ -118,44 +143,46 @@ void handle_post(int client_socket, char *request) {
 // Implementation of PUT request (binary safe)
 //============================================================================
 
-void handle_put(int client_socket, const char *path, char *request) {
+void handle_put(int client_socket,const char *path,char *request)
+{
+    char *header_end = strstr(request,"\r\n\r\n");
 
-    char *header_end = strstr(request, "\r\n\r\n");
-
-    if (!header_end) {
+    if (!header_end)
+    {
         send_405(client_socket);
         return;
     }
 
-    char *cl = strstr(request, "Content-Length:");
-    int content_length = 0;
+    char *cl = strstr(request,"Content-Length:");
 
-    if (cl) {
-        sscanf(cl, "Content-Length: %d", &content_length);
-    } else {
-        send_405(client_socket);
-        return;
-    }
+    int length = 0;
+
+    if (cl)
+        sscanf(cl,"Content-Length: %d",&length);
 
     char *body = header_end + 4;
 
-    FILE *file = fopen(path, "wb");
+    FILE *file = fopen(path,"wb");
 
-    if (!file) {
+    if (!file)
+    {
         send_405(client_socket);
         return;
     }
 
-    fwrite(body, 1, content_length, file);
+    fwrite(body,1,length,file);
 
     fclose(file);
 
     char *response =
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain\r\n\r\n"
-        "File written\n";
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 12\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "File written";
 
-    send(client_socket, response, strlen(response), 0);
+    send_all(client_socket,response,strlen(response));
 }
 
 
@@ -164,26 +191,50 @@ void handle_put(int client_socket, const char *path, char *request) {
 // Implementation of DELETE request
 //============================================================================
 
-void handle_delete(int client_socket, const char *path) {
-
-    if (remove(path) == 0) {
-
+void handle_delete(int client_socket,const char *path)
+{
+    if (remove(path) == 0)
+    {
         char *response =
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/plain\r\n\r\n"
-            "File deleted\n";
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 12\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+        "File deleted";
 
-        send(client_socket, response, strlen(response), 0);
-
-    } else {
-
-        char *response =
-            "HTTP/1.1 404 Not Found\r\n"
-            "Content-Type: text/plain\r\n\r\n"
-            "File not found\n";
-
-        send(client_socket, response, strlen(response), 0);
+        send_all(client_socket,response,strlen(response));
     }
+    else
+    {
+        char *response =
+        "HTTP/1.1 404 Not Found\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 14\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n"
+        "File not found";
+
+        send_all(client_socket,response,strlen(response));
+    }
+}
+
+
+//============================================================================
+// Implementation of 505 error
+//============================================================================
+
+void send_505(int socket)
+{
+    char *response =
+    "HTTP/1.1 505 HTTP Version Not Supported\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 30\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "505 HTTP Version Not Supported";
+
+    send_all(socket,response,strlen(response));
 }
 
 
@@ -192,14 +243,17 @@ void handle_delete(int client_socket, const char *path) {
 // Implementation of 405 error
 //============================================================================
 
-void send_405(int client_socket) {
-
+void send_405(int socket)
+{
     char *response =
-        "HTTP/1.1 405 Method Not Allowed\r\n"
-        "Content-Type: text/plain\r\n\r\n"
-        "Method Not Allowed";
+    "HTTP/1.1 405 Method Not Allowed\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 18\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "Method Not Allowed";
 
-    send(client_socket, response, strlen(response), 0);
+    send_all(socket,response,strlen(response));
 }
 
 
@@ -208,122 +262,140 @@ void send_405(int client_socket) {
 // Implementation of 403 error
 //============================================================================
 
-void send_403(int client_socket) {
-
+void send_403(int socket)
+{
     char *response =
-        "HTTP/1.1 403 Forbidden\r\n"
-        "Content-Type: text/plain\r\n"
-        "Content-Length: 13\r\n"
-        "\r\n"
-        "403 Forbidden";
+    "HTTP/1.1 403 Forbidden\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 13\r\n"
+    "Connection: keep-alive\r\n"
+    "\r\n"
+    "403 Forbidden";
 
-    send(client_socket, response, strlen(response), 0);
+    send_all(socket,response,strlen(response));
 }
 
 
 
+
 //============================================================================
-// Handle client request (called by threadpool workers)
+// Handle client (persistent connection)
 //============================================================================
 
-void handle_client(int client_socket) {
-    printf("Thread handling request\n");   // DEBUG: shows concurrency
+void handle_client(int client_socket)
+{
     char buffer[8192];
 
-    int bytes = read_http_request(client_socket, buffer, sizeof(buffer));
+    while (1)
+    {
+        int bytes = read_http_request(client_socket,buffer,sizeof(buffer));
 
-    if (bytes <= 0) {
-        close(client_socket);
-        return;
+        if (bytes <= 0)
+            break;
+
+        char method[16];
+        char path[256];
+        char version[16];
+
+        sscanf(buffer,"%s %s %s",method,path,version);
+
+        if (strcmp(version,"HTTP/1.1") &&
+            strcmp(version,"HTTP/1.0"))
+        {
+            send_505(client_socket);
+            break;
+        }
+
+        if (strstr(path,".."))
+        {
+            send_403(client_socket);
+            break;
+        }
+
+        char file_path[512];
+
+        if (!strcmp(path,"/"))
+            strcpy(file_path,"www/index.html");
+        else
+            snprintf(file_path,sizeof(file_path),"www%s",path);
+
+        if (!strcmp(method,"GET"))
+            send_file(client_socket,file_path);
+
+        else if (!strcmp(method,"POST"))
+            handle_post(client_socket,buffer);
+
+        else if (!strcmp(method,"PUT"))
+            handle_put(client_socket,file_path,buffer);
+
+        else if (!strcmp(method,"DELETE"))
+            handle_delete(client_socket,file_path);
+
+        else
+            send_405(client_socket);
+
+        if (strstr(buffer,"Connection: close"))
+            break;
     }
-
-    // printf("Request:\n%s\n", buffer);
-
-    char method[16];
-    char path[256];
-
-    sscanf(buffer, "%s %s", method, path);
-
-    // printf("Method: %s\n", method);
-    // printf("Path: %s\n", path);
-
-    if (strstr(path, "..") != NULL) {
-        send_403(client_socket);
-        close(client_socket);
-        return;
-    }
-
-    char file_path[512];
-
-    if (strcmp(path, "/") == 0)
-        strcpy(file_path, "www/index.html");
-    else
-        snprintf(file_path, sizeof(file_path), "www%s", path);
-
-    if (strcmp(method, "GET") == 0)
-        send_file(client_socket, file_path);
-    else if (strcmp(method, "POST") == 0)
-        handle_post(client_socket, buffer);
-    else if (strcmp(method, "PUT") == 0)
-        handle_put(client_socket, file_path, buffer);
-    else if (strcmp(method, "DELETE") == 0)
-        handle_delete(client_socket, file_path);
-    else
-        send_405(client_socket);
 
     close(client_socket);
-
-    printf("Client disconnected\n");
 }
 
 
 
+
 //============================================================================
-// Recv helper function
+// Recv helper function(Read HTTP request)
 //============================================================================
 
-int read_http_request(int client_socket, char *buffer, int buffer_size) {
-
+int read_http_request(int client_socket,char *buffer,int size)
+{
     int total = 0;
 
-    while (1) {
-
-        int bytes = recv(client_socket, buffer + total, buffer_size - total, 0);
-
-        if (bytes <= 0)
-            return -1;
-
-        total += bytes;
-
-        buffer[total] = '\0';
-
-        char *header_end = strstr(buffer, "\r\n\r\n");
-
-        if (header_end) {
-
-            char *cl = strstr(buffer, "Content-Length:");
-
-            int content_length = 0;
-
-            if (cl)
-                sscanf(cl, "Content-Length: %d", &content_length);
-
-            char *body = header_end + 4;
-
-            int body_received = total - (body - buffer);
-
-            while (body_received < content_length) {
-
-                bytes = recv(client_socket,
-                             buffer + total,
-                             buffer_size - total,
-                             0);
+    while (1)
+    {
+        int bytes = recv(client_socket,
+                 buffer + total,
+                 size - total - 1,
+                 0);
 
                 if (bytes <= 0)
                     return -1;
 
                 total += bytes;
-                body_received += bytes;
+
+                if (total >= size - 1)
+                    return -1;
+
+                buffer[total] = '\0';
+
+        char *header_end = strstr(buffer,"\r\n\r\n");
+
+        if (header_end)
+        {
+            char *cl = strstr(buffer,"Content-Length:");
+
+            int length = 0;
+
+            if (cl)
+                sscanf(cl,"Content-Length: %d",&length);
+
+            char *body = header_end + 4;
+
+            int received = total - (body - buffer);
+
+            while (received < length)
+            {
+                bytes = recv(client_socket,
+                    buffer + total,
+                    size - total - 1,
+                    0);
+
+                if (bytes <= 0)
+                    return -1;
+
+                total += bytes;
+                received += bytes;
 
                 buffer[total] = '\0';
             }
